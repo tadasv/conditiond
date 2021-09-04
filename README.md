@@ -67,6 +67,49 @@ $ curl -d @input localhost:9000/evaluate
 {"error":null,"result":false}
 ```
 
+## Why do we need this?
+
+Sometimes we want to create our own policies or constraints, but manage them in
+data instead of updating code and shipping a new release. `conditiond` enables
+that. Such rules can be managed by other people outside of engineering via
+some nice UI requiring almost no code changes once integration with your backend
+is complete.
+
+`conditiond` can serve as a building block for
+
+- Access control policies.
+- AB tests and experiments.
+- Feature flag toggles.
+
+For example, we could setup an experiment where we assign 50% of the users to
+`cohort-a` and another 50% to `cohort-b`:
+
+```
+{
+  "condition": {
+    "if": [
+      {
+        "gt": [
+          5,
+          {
+            "sha1mod": [
+              {"context": ["user"]},
+              10
+            ]
+          }
+        ]
+      },
+      "cohort-a",
+      "cohort-b"
+    ]
+  },
+  "context": {
+    "user": "some user id"
+  }
+}
+```
+
+
 ## The Protocol
 
 `conditiond` operates on a stream of JSON messages. These messages can be
