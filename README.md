@@ -6,6 +6,14 @@ This tool lets you define constraints in *data* and evaluate them at run time.
 It's designed to be run as a container sidecar but it can also be used from the
 command line and integrate with your shell scripts.
 
+## Installation
+
+```
+go install github.com/tadasv/conditiond/cmd/conditiond@latest
+```
+
+Then run `conditioned -h`.
+
 ## Example
 
 ```sh
