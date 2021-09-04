@@ -67,6 +67,69 @@ $ curl -d @input localhost:9000/evaluate
 {"error":null,"result":false}
 ```
 
+## The Protocol
+
+`conditiond` operates on a stream of JSON messages. These messages can be
+passed in via CLI or HTTP RPC. A stream is created by simply concatenating
+several JSON messages. The messages **may** be evaluated out of order but the
+result messages will always be returned in the same order as the input so they
+can be indexed the same way.
+
+For a given two message input stream
+
+```
+{ input message 1 }
+{ input message 1 }
+```
+
+We are going to return a stream of results
+
+```
+{ results for message 1 }
+{ results for message 2 }
+```
+
+The request message is a JSON object:
+
+```
+{
+  "condition": ...
+  "context": ...
+}
+```
+
+Here, `condition` contains an expression (see Expression Specification).
+Optionally, a `context` object can be provided. This context object is passed
+into every expression at evaluation time so expressions that need outside
+information can utilize it.
+
+Here's an example of a full request message:
+
+```
+{
+  "condition": {
+    "gt": [{"context": ["monthly_spend"]}, 10000]
+  },
+  "context": {
+    "user_id": "123",
+    "monthly_spend": 5555
+  }
+}
+```
+
+The result message is a JSON object of the following form:
+
+```
+{
+  "error": ...
+  "result": ...
+}
+```
+
+The `error` key will be set to a string containing an error message if
+evaluation failed for some reason. The `error` will be null otherwise and
+`result` key will contain `condition` evaluation result.
+
 ## Expression specification
 
 Expressions in `conditiond` are designed after
