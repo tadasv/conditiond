@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/tadasv/conditiond"
+	"log"
+	"net/http"
 	"os"
+
+	"github.com/tadasv/conditiond"
 )
 
 var (
@@ -28,36 +31,32 @@ type EvaluationResult struct {
 }
 
 func evaluatorFromConfig(cfg *Config) *condition.Evaluator {
-	// registry -> name
+	whitelistMap := map[string]interface{}{}
+
+	for _, wl := range cfg.EvaluatorConfig.FunctionWhitelist {
+		whitelistMap[wl] = nil
+	}
 
 	handlerMap := map[string]condition.ExpressionFunc{}
-	for key, value := range cfg.EvaluatorConfig.FunctionMap {
-		// It's ok to do this without checking for keys in the registry.  We're
-		// assuming that the configuration was validated on start up and should
-		// contain valid keys.
-		handlerMap[key] = condition.ExpressionRegistry[value]
+	for newFuncName, registryFuncName := range cfg.EvaluatorConfig.FunctionMap {
+		// if nothing is whitelisted, we're allowing all functions; otherwise, only the ones that were whitelisted.
+		if _, ok := whitelistMap[registryFuncName]; ok || cfg.EvaluatorConfig.FunctionWhitelist == nil {
+			// It's ok to do this without checking for keys in the registry.  We're
+			// assuming that the configuration was validated on start up and should
+			// contain valid keys.
+			handlerMap[newFuncName] = condition.ExpressionRegistry[registryFuncName]
+		}
 	}
 
 	evaluator := condition.NewEvaluator()
-
-	if len(cfg.EvaluatorConfig.FunctionWhitelist) > 0 {
-		for _, whitelistedValue := range cfg.EvaluatorConfig.FunctionWhitelist {
-			if handler, ok := handlerMap[whitelistedValue]; ok {
-				evaluator.AddHandler(whitelistedValue, handler)
-			}
-		}
-	} else {
-		for key, f := range handlerMap {
-			evaluator.AddHandler(key, f)
-		}
+	for key, f := range handlerMap {
+		evaluator.AddHandler(key, f)
 	}
 
 	return evaluator
 }
 
-func parseAndEvaluate(cfg *Config, msg *ConditionMessage) (interface{}, error) {
-	e := condition.NewDefaultEvaluator()
-
+func parseAndEvaluate(e *condition.Evaluator, msg *ConditionMessage) (interface{}, error) {
 	root, err := condition.Parse(string(msg.Condition))
 	if err != nil {
 		return nil, err
@@ -72,17 +71,19 @@ func main() {
 
 	config, err := GetConfig(*configFilePath)
 	if err != nil {
-		panic(err)
+		log.Fatalf("unable to read configuration: %s", err.Error())
 	}
 
 	if err := config.Validate(); err != nil {
-		panic(err)
+		log.Fatalf("invalid configuration: %s", err.Error())
 	}
 
 	if *configDump {
-		fmt.Fprintf(os.Stderr, "%s", config.String())
+		fmt.Fprintf(os.Stdout, "%s", config.String())
 		return
 	}
+
+	evaluator := evaluatorFromConfig(config)
 
 	if *cli {
 		var dec *json.Decoder
@@ -93,8 +94,7 @@ func main() {
 		} else {
 			fd, err := os.Open(*cliIn)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "unable to open input file: %s\n", err.Error())
-				os.Exit(-1)
+				log.Fatalf("unable to open input file: %s\n", err.Error())
 			}
 			dec = json.NewDecoder(fd)
 			defer fd.Close()
@@ -105,8 +105,7 @@ func main() {
 		} else {
 			fd, err := os.OpenFile(*cliOut, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "unable to open output file %q: %s\n", *cliOut, err.Error())
-				os.Exit(-1)
+				log.Fatalf("unable to open output file %q: %s\n", *cliOut, err.Error())
 			}
 			enc = json.NewEncoder(fd)
 			defer fd.Sync()
@@ -116,10 +115,10 @@ func main() {
 		for dec.More() {
 			msg := ConditionMessage{}
 			if err := dec.Decode(&msg); err != nil {
-				panic(err)
+				log.Fatalf("unable to decode message: %s", err.Error())
 			}
 
-			value, err := parseAndEvaluate(config, &msg)
+			value, err := parseAndEvaluate(evaluator, &msg)
 			resultMsg := EvaluationResult{
 				Result: value,
 			}
@@ -129,11 +128,55 @@ func main() {
 			}
 
 			if err := enc.Encode(resultMsg); err != nil {
-				panic(err)
+				log.Fatalf("unable to encode message: %s", err.Error())
 			}
 		}
 	} else {
-		panic("not implemented")
+		// Healthcheck endpoint
+		http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+
+		// Evaluation endpoint
+		http.HandleFunc("/evaluate", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			defer r.Body.Close()
+
+			dec := json.NewDecoder(r.Body)
+			enc := json.NewEncoder(w)
+			results := []EvaluationResult{}
+
+			for dec.More() {
+				msg := ConditionMessage{}
+				if err := dec.Decode(&msg); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+
+				value, err := parseAndEvaluate(evaluator, &msg)
+				resultMsg := EvaluationResult{
+					Result: value,
+				}
+				if err != nil {
+					errMsg := err.Error()
+					resultMsg.Error = &errMsg
+				}
+
+				results = append(results, resultMsg)
+			}
+
+			for _, result := range results {
+				if err := enc.Encode(result); err != nil {
+					// TODO
+				}
+			}
+		})
+
+		log.Printf("starting conditiond server on %s", *listenAddress)
+		http.ListenAndServe(*listenAddress, nil)
 	}
 
 }
