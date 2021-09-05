@@ -1,3 +1,5 @@
+[![Go](https://github.com/tadasv/conditiond/actions/workflows/go.yml/badge.svg)](https://github.com/tadasv/conditiond/actions/workflows/go.yml)
+
 # conditiond
 
 `conditiond` is a generic constraint and policy evaluator.
